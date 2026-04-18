@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Anime Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <h1>Anime Tracker</h1>
+  <div>
+    <span id="user-email"></span>
+    <button id="logout-btn" class="hidden">Logout</button>
+  </div>
+</header>
+
+<main class="container">
+
+  <section id="auth-section" class="card">
+    <h2>Login</h2>
+    <input id="email" type="email" placeholder="Email"/>
+    <input id="password" type="password" placeholder="Password"/>
+    <button id="login-btn">Login</button>
+    <p id="auth-message"></p>
+  </section>
+
+  <section id="app-section" class="hidden">
+    <div class="card">
+      <h2>Search</h2>
+      <div class="search-row">
+        <input id="search-input" placeholder="Search anime..."/>
+        <button id="search-btn">Search</button>
+      </div>
+      <div id="search-results" class="grid"></div>
+    </div>
+
+    <div class="card">
+      <h2>My List</h2>
+      <div id="my-list" class="grid"></div>
+    </div>
+  </section>
+
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
