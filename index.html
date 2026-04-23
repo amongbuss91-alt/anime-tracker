@@ -10,30 +10,11 @@
 
 <header class="topbar">
   <h1>Anime Tracker</h1>
-  <div class="topbar-actions">
-    <span id="user-email"></span>
-    <button id="logout-btn" class="hidden">Logout</button>
-  </div>
+  <p class="muted">No login required — track instantly.</p>
 </header>
 
 <main class="container">
-
-<section id="auth-section" class="card">
-  <h2>Login / Sign Up</h2>
-
-  <input id="email" type="email" placeholder="Email">
-  <input id="password" type="password" placeholder="Password">
-
-  <div class="auth-buttons">
-    <button id="login-btn">Login</button>
-    <button id="signup-btn" class="secondary-btn">Sign Up</button>
-  </div>
-
-  <p id="auth-message"></p>
-</section>
-
-<section id="app-section" class="hidden">
-  <div class="card">
+  <section class="card">
     <h2>Search Anime</h2>
     <p class="muted">Search AniList and add shows to your personal tracking list.</p>
     <div class="search-row">
@@ -41,9 +22,9 @@
       <button id="search-btn">Search</button>
     </div>
     <div id="search-results" class="grid"></div>
-  </div>
+  </section>
 
-  <div class="card">
+  <section class="card">
     <h2>My List</h2>
     <div class="stats-row">
       <div class="stat-box"><span class="stat-label">Total</span><span class="stat-value" id="stat-total">0</span></div>
@@ -60,9 +41,7 @@
       </select>
     </div>
     <div id="my-list" class="grid"></div>
-  </div>
-</section>
-
+  </section>
 </main>
 
 <script type="module" src="app.js"></script>

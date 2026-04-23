@@ -14,12 +14,6 @@ body {
   background: #111827;
 }
 
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
 .container {
   padding: 20px;
   max-width: 1100px;
@@ -59,6 +53,12 @@ button:hover {
   background: #2563eb;
 }
 
+button:disabled {
+  opacity: 0.65;
+  cursor: default;
+  background: #64748b;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -83,24 +83,6 @@ button:hover {
 
 .anime-card h3 {
   margin-top: 4px;
-}
-
-.hidden {
-  display: none;
-}
-
-.auth-buttons {
-  display: flex;
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.secondary-btn {
-  background: #475569;
-}
-
-.secondary-btn:hover {
-  background: #334155;
 }
 
 .search-row {
