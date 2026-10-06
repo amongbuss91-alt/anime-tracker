@@ -47,7 +47,7 @@ const {$,esc,STATUS,titleOf}=Site;
 const COLORS={Manhwa:'#3987e5',Manga:'#d95926',Manhua:'#199e70',Novel:'#c98500',Anime:'#c05cd6',Other:'#898781'};
 const STRONG=new Set(['ADAPTATION','SOURCE','PREQUEL','SEQUEL','PARENT','SIDE_STORY','SPIN_OFF','ALTERNATIVE','SUMMARY','COMPILATION','CONTAINS']);
 const REL_LABEL={ADAPTATION:'adapted as',SOURCE:'based on',PREQUEL:'prequel',SEQUEL:'sequel',PARENT:'parent story',SIDE_STORY:'side story',SPIN_OFF:'spin-off',ALTERNATIVE:'alternative',SUMMARY:'summary',COMPILATION:'compilation',CONTAINS:'contains',CHARACTER:'shared character',OTHER:'related'};
-const NODE_W=64,NODE_H=96,COL=170,ROW=150,PAD=24;
+const NODE_W=64,NODE_H=96,COL=150,ROW=200,PAD=28;
 
 let mine=null,relData=null,animeStatus=null,loading=false,seenSig='';
 
@@ -133,13 +133,13 @@ function layout(g){
   const depth=new Map([[root,0]]),q=[root];
   while(q.length){const x=q.shift();adj.get(x).forEach(y=>{if(!depth.has(y)){depth.set(y,depth.get(x)+1);q.push(y)}})}
   const cols=[];g.nodes.forEach(n=>{const d=depth.get(n.id)||0;(cols[d]||(cols[d]=[])).push(n)});
-  const pos=new Map();let maxRows=0;
-  cols.forEach((c,ci)=>{c.sort((a,b)=>a.medium.localeCompare(b.medium)||a.title.localeCompare(b.title));maxRows=Math.max(maxRows,c.length)});
-  cols.forEach((c,ci)=>{
-    const off=(maxRows-c.length)*ROW/2;
-    c.forEach((n,ri)=>pos.set(n.id,{x:PAD+ci*COL,y:PAD+off+ri*ROW}));
+  const pos=new Map();let widest=0;
+  cols.forEach(c=>{c.sort((a,b)=>a.medium.localeCompare(b.medium)||a.title.localeCompare(b.title));widest=Math.max(widest,c.length)});
+  cols.forEach((c,li)=>{
+    const off=(widest-c.length)*COL/2;
+    c.forEach((n,ci)=>pos.set(n.id,{x:PAD+off+ci*COL,y:PAD+li*ROW}));
   });
-  return {pos,w:PAD*2+(cols.length-1)*COL+NODE_W+20,h:PAD*2+(maxRows-1)*ROW+NODE_H+34};
+  return {pos,w:PAD*2+(widest-1)*COL+NODE_W,h:PAD*2+(cols.length-1)*ROW+NODE_H+34};
 }
 
 const short=(s,n)=>s.length>n?s.slice(0,n-1)+'…':s;
@@ -149,7 +149,10 @@ function drawGroup(g,i){
   let svg=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Connected titles">`;
   g.edges.forEach(e=>{
     const p=pos.get(e.a),q=pos.get(e.b);if(!p||!q)return;
-    const x1=p.x+NODE_W/2,y1=p.y+NODE_H/2,x2=q.x+NODE_W/2,y2=q.y+NODE_H/2;
+    let up=p,dn=q;if(q.y<p.y||(q.y===p.y&&q.x<p.x)){up=q;dn=p}
+    let x1,y1,x2,y2;
+    if(up.y===dn.y){x1=up.x+NODE_W+4;y1=up.y+NODE_H/2;x2=dn.x-4;y2=dn.y+NODE_H/2}
+    else{x1=up.x+NODE_W/2;y1=up.y+NODE_H+36;x2=dn.x+NODE_W/2;y2=dn.y-5}
     const mx=(x1+x2)/2,my=(y1+y2)/2;
     const loose=!STRONG.has(e.t);
     svg+=`<path d="M${x1},${y1} Q${mx},${my-(x1===x2?0:0)} ${x2},${y2}" fill="none" stroke="${loose?'#5d5790':'#7c6cf0'}" stroke-width="${loose?1.2:2}" ${loose?'stroke-dasharray="4 4"':''} opacity=".8"><title>${esc(REL_LABEL[e.t]||e.t)}</title></path>`;
