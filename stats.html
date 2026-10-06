@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stats | StoryShelf Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Karla:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site.css?v=20261004o">
+</head>
+<body class="app">
+<div id="nav"></div>
+<main class="shell" id="main">
+  <div class="pagehead">
+    <div><h1>Stats</h1><p class="lede" id="lede">Loading your reading activity…</p></div>
+    <div class="livebox" id="livebox"></div>
+  </div>
+
+  <div id="content" class="hidden">
+    <section class="block" aria-labelledby="h-act">
+      <h2 id="h-act">Reading activity</h2>
+      <div class="tiles" id="tiles"></div>
+    </section>
+
+    <section class="block" aria-labelledby="h-30">
+      <h2 id="h-30">Last 30 days</h2>
+      <p class="desc">Chapters you logged on AniList each day. Hover or tab to a point for the exact count.</p>
+      <p class="big"><b id="big30">0</b><span>chapters in the last 30 days</span></p>
+      <div class="chartbox" id="chart30"></div>
+    </section>
+
+    <section class="block" aria-labelledby="h-12">
+      <h2 id="h-12">Last 12 months</h2>
+      <p class="desc">One block per day. Brighter blocks mean more chapters that day.</p>
+      <p class="big"><b id="big12">0</b><span>chapters in the last 12 months</span></p>
+      <div class="heat" id="heat"></div>
+      <div class="hleg" id="hleg"></div>
+    </section>
+
+    <section class="block" aria-labelledby="h-tags">
+      <h2 id="h-tags">Tags</h2>
+      <div class="legend" id="tlegend"></div>
+      <div class="bars" id="tbars" role="list"></div>
+    </section>
+
+    <p class="shint" id="note"></p>
+  </div>
+</main>
+<div class="tip hidden" id="tip" role="tooltip"></div>
+
+<script src="site.js?v=20261004o"></script>
+<script>
+const {$,esc,store,originOf,TYPES}=Site;
+const TYPE_COLOR={Manhwa:'#3987e5',Manga:'#d95926',Manhua:'#199e70',Novel:'#c98500',Other:'#898781'};
+const lum=h=>{const c=[1,3,5].map(i=>{const v=parseInt(h.substr(i,2),16)/255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*c[0]+.7152*c[1]+.0722*c[2]};
+const inkOn=h=>lum(h)>.18?'#0a091c':'#ffffff';
+const libLink=p=>{const q=new URLSearchParams({user:name});if(p.tag)q.set('tag',p.tag);if(p.type)q.set('type',p.type);return 'library.html?'+q.toString()};
+const API='https://graphql.anilist.co';
+let entries=[],lastSync=0,name='',items=[],busy=false,again=false,failed=false,loading=false;
+const DAY=86400;
+const pad=n=>String(n).padStart(2,'0');
+const keyOf=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmt=d=>MON[d.getMonth()]+' '+d.getDate();
+const fmtFull=d=>fmt(d)+', '+d.getFullYear();
+const plural=(n,w)=>`${n.toLocaleString()} ${w}${n===1?'':'s'}`;
+
+/* ---------- tooltip (text only) ---------- */
+const tip=$('tip');
+function showTip(a,b,x,y){
+  tip.textContent='';
+  const s=document.createElement('strong');s.textContent=a;
+  const p=document.createElement('span');p.textContent=b;
+  tip.append(s,p);tip.classList.remove('hidden');
+  const w=tip.offsetWidth,h=tip.offsetHeight;
+  tip.style.left=Math.max(8,Math.min(x+14,innerWidth-w-8))+'px';
+  tip.style.top=Math.max(8,Math.min(y+16,innerHeight-h-8))+'px';
+}
+const hideTip=()=>tip.classList.add('hidden');
+function wireTip(root,sel,fn){
+  root.addEventListener('pointermove',e=>{const t=e.target.closest(sel);if(!t){hideTip();return}const [a,b]=fn(t);showTip(a,b,e.clientX,e.clientY)});
+  root.addEventListener('pointerleave',hideTip);
+  root.addEventListener('focusin',e=>{const t=e.target.closest(sel);if(!t)return;const [a,b]=fn(t),r=t.getBoundingClientRect();showTip(a,b,r.left+r.width/2,r.bottom-8)});
+  root.addEventListener('focusout',hideTip);
+}
+
+/* ---------- AniList activity ---------- */
+async function gql(query,variables){
+  for(let tries=0;tries<4;tries++){
+    const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({query,variables})});
+    if(r.status===429){
+      const wait=(parseInt(r.headers.get('Retry-After'),10)||20)*1000;
+      await new Promise(f=>setTimeout(f,Math.min(wait,60000)));continue;
+    }
+    const j=await r.json();
+    if(j.errors)throw new Error('AniList returned an error.');
+    return j.data;
+  }
+  throw new Error('AniList is rate limiting requests. Try again in a minute.');
+}
+const ACT=`query($id:Int,$page:Int,$since:Int){Page(page:$page,perPage:50){pageInfo{hasNextPage}
+ activities(userId:$id,type:MANGA_LIST,sort:ID_DESC,createdAt_greater:$since){... on ListActivity{id createdAt status progress media{id title{romaji english}}}}}}`;
+function chaptersOf(a){
+  if(!a.progress||!/read/i.test(a.status||'')||/plan|paus|drop/i.test(a.status))return 0;
+  const m=/(\d+)(?:\s*-\s*(\d+))?/.exec(a.progress);
+  if(!m)return 0;
+  const x=+m[1],y=m[2]?+m[2]:x;
+  return Math.max(1,Math.min(y-x+1,2000));
+}
+const ckey=()=>'act.v1:'+name.toLowerCase();
+function loadCache(){return store.get(ckey(),null)}
+function saveCache(c){store.set(ckey(),c)}
+
+async function sync(){
+  if(busy){again=true;return}
+  const wait=10000-(Date.now()-lastSync);
+  if(wait>0){clearTimeout(sync.t);sync.t=setTimeout(sync,wait+50);return}
+  busy=true;failed=false;
+  try{
+    const now=Math.floor(Date.now()/1000),floor=now-370*DAY;
+    let c=loadCache();
+    if(!c||!c.id){
+      const d=await gql('query($n:String){User(name:$n){id}}',{n:name});
+      c={id:d.User.id,full:0,items:[]};
+    }
+    // first full load goes back 12 months; later syncs only re-read the last 3 days
+    const since=c.full?Math.max(floor,c.full-3*DAY):floor;
+    const fresh=new Map(c.items.filter(i=>i[1]<since||!c.full).map(i=>[i[0],i]));
+    if(!c.full)fresh.clear();
+    let page=1,more=true,got=0;
+    while(more&&page<=80){
+      const d=await gql(ACT,{id:c.id,page,since:since-1});
+      const P=d.Page;
+      P.activities.forEach(a=>{
+        if(!a||!a.id)return;
+        const n=chaptersOf(a);
+        if(n)fresh.set(a.id,[a.id,a.createdAt,n,a.media.id,a.media.title.english||a.media.title.romaji]);
+      });
+      got+=P.activities.length;
+      more=P.pageInfo.hasNextPage;page++;
+      items=[...fresh.values()].filter(i=>i[1]>=floor);
+      if(more){$('lede').textContent=`Loading your reading activity, ${got.toLocaleString()} updates so far…`;if(page===3||page%5===0)render()}
+      if(more)await new Promise(f=>setTimeout(f,450));
+    }
+    items=[...fresh.values()].filter(i=>i[1]>=floor);
+    saveCache({id:c.id,full:now,items});
+  }catch(e){failed=true;$('note').textContent=(e&&e.message&&!/fetch/i.test(e.message))?e.message:'Could not reach AniList for your activity. Showing what was saved earlier.'}
+  busy=false;lastSync=Date.now();
+  render();
+  if(again){again=false;sync()}
+}
+
+/* ---------- numbers ---------- */
+function byDay(){
+  const m=new Map();
+  items.forEach(i=>{const k=keyOf(new Date(i[1]*1000));m.set(k,(m.get(k)||0)+i[2])});
+  return m;
+}
+function render(){
+  const days=byDay(),today=new Date();today.setHours(0,0,0,0);
+  const at=n=>{const d=new Date(today);d.setDate(d.getDate()-n);return d};
+  // last 30 days
+  const last30=[];for(let n=29;n>=0;n--){const d=at(n);last30.push({d,v:days.get(keyOf(d))||0})}
+  const t30=last30.reduce((s,x)=>s+x.v,0);
+  // 12 months
+  const start=at(364);start.setDate(start.getDate()-start.getDay());
+  const cells=[];
+  for(let d=new Date(start);d<=today;d.setDate(d.getDate()+1)){cells.push({d:new Date(d),v:days.get(keyOf(d))||0})}
+  const t12=cells.reduce((s,x)=>s+x.v,0),active=cells.filter(x=>x.v>0).length;
+  let best=null,run=0,streak=0;
+  cells.forEach(x=>{if(x.v>0){run++;streak=Math.max(streak,run)}else run=0;if(!best||x.v>best.v)best=x});
+  const titles=new Set(items.map(i=>i[3])).size;
+
+  $('content').classList.remove('hidden');
+  $('main').dataset.state='';
+  drawTags();
+  $('lede').textContent=busy?`Loading your reading activity…`:`Chapters you have logged on AniList, for ${name}.`;
+  const tToday=days.get(keyOf(today))||0;
+  let t7=0;for(let n=0;n<7;n++)t7+=days.get(keyOf(at(n)))||0;
+  const dom=today.getDate();let tMonth=0;for(let n=0;n<dom;n++)tMonth+=days.get(keyOf(at(n)))||0;
+  // current streak: days in a row with reading; a quiet today does not break it yet
+  let cur=0,n0=tToday>0?0:1;while(n0<365&&(days.get(keyOf(at(n0)))||0)>0){cur++;n0++}
+  $('tiles').innerHTML=[
+    ['Today',tToday.toLocaleString(),'chapters'],
+    ['This week',t7.toLocaleString(),'chapters \u00b7 7d'],
+    ['This month',tMonth.toLocaleString(),'chapters \u00b7 '+dom+'d'],
+    ['Current streak',cur.toLocaleString(),cur===1?'day':'days']
+  ].map(([l,v,u])=>`<div class="tile"><span class="tl">${esc(l)}</span><b>${esc(v)}</b><span>${esc(u)}</span></div>`).join('');
+  $('big30').textContent=t30.toLocaleString();
+  $('big12').textContent=t12.toLocaleString();
+  drawLine(last30);
+  drawHeat(cells,today);
+  if(!failed)$('note').textContent='Chapter counts come from your AniList activity feed, so they follow what AniList recorded when you updated progress. Updating many chapters at once counts them all on that day.';
+}
+
+function drawLine(pts){
+  const W=900,H=220,l=34,r=10,t=12,b=26,max=Math.max(1,...pts.map(p=>p.v));
+  const top=max<=4?4:Math.ceil(max/4)*4;
+  const x=i=>l+(W-l-r)*i/(pts.length-1),y=v=>t+(H-t-b)*(1-v/top);
+  let g='';
+  [0,top/2,top].forEach(v=>{g+=`<line class="grid" x1="${l}" x2="${W-r}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${l-8}" y="${y(v)+4}" text-anchor="end">${v}</text>`});
+  const line=pts.map((p,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(p.v).toFixed(1)).join('');
+  const area=line+`L${x(pts.length-1)} ${y(0)}L${x(0)} ${y(0)}Z`;
+  let dots='';
+  pts.forEach((p,i)=>{dots+=`<g><circle class="hit" cx="${x(i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="12" tabindex="0" data-i="${i}" role="img" aria-label="${esc(fmt(p.d))}: ${plural(p.v,'chapter')}"/><circle class="pt" cx="${x(i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="3.5" pointer-events="none"/></g>`});
+  $('chart30').innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="group" aria-label="Chapters per day, last 30 days">${g}<path class="ar" d="${area}"/><path class="ln" d="${line}"/>${dots}
+   <text class="ax" x="${l}" y="${H-4}">${esc(fmt(pts[0].d))}</text><text class="ax" x="${W-r}" y="${H-4}" text-anchor="end">${esc(fmt(pts[pts.length-1].d))}</text></svg>`;
+  $('chart30').onpointermove=null;
+  $('chart30')._pts=pts;
+}
+wireTip($('chart30'),'.hit',el=>{const p=$('chart30')._pts[+el.dataset.i];return [fmtFull(p.d),plural(p.v,'chapter')]});
+
+function drawHeat(cells,today){
+  const nz=cells.map(c=>c.v).filter(v=>v>0).sort((a,b)=>a-b);
+  const q=f=>nz.length?nz[Math.min(nz.length-1,Math.floor(nz.length*f))]:1;
+  const cuts=[q(.25),q(.5),q(.75),q(.9)];
+  const lvl=v=>!v?0:v<=cuts[0]?1:v<=cuts[1]?2:v<=cuts[2]?3:v<=cuts[3]?4:5;
+  const first=cells[0].d.getDay();// 0 because start is a Sunday
+  let html='',mon='',lastM=-1;
+  cells.forEach((c,i)=>{
+    const w=Math.floor(i/7);
+    if(c.d.getDay()===0||i===0){
+      const m=c.d.getMonth();
+      if(m!==lastM&&c.d.getDate()<=7+0){mon+=`<span style="left:${w*16}px">${MON[m]}</span>`;lastM=m}
+    }
+    const isT=c.d.getTime()===today.getTime();
+    html+=`<div class="hc l${lvl(c.v)}${isT?' today':''}" data-d="${keyOf(c.d)}" data-v="${c.v}" data-t="${esc(fmtFull(c.d))}"></div>`;
+  });
+  $('heat').innerHTML=`<div class="hw" style="width:${Math.ceil(cells.length/7)*16+32}px"><div class="hmon" style="margin-left:32px">${mon}</div><div class="hbody"><div class="hdays" aria-hidden="true"><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div><div class="hgrid">${html}</div></div></div>`;
+  $('hleg').innerHTML='<span>Less</span><i></i><i style="background:#184f95"></i><i style="background:#256abf"></i><i style="background:#3987e5"></i><i style="background:#6da7ec"></i><i style="background:#9ec5f4"></i><span>More</span>';
+  const h=$('heat');h.scrollLeft=h.scrollWidth;
+}
+wireTip($('heat'),'.hc',el=>[el.dataset.t,plural(+el.dataset.v,'chapter')]);
+
+/* ---------- tags by type (stacked bars) ---------- */
+const shortTag=n=>n.replace(/^Primarily (.+) Cast$/,'$1 Cast').replace(/Protagonists/,'MCs').replace(/Protagonist/,'MC');
+function drawTags(){
+  const by={},typeTotals={};
+  entries.forEach(e=>{
+    const t=originOf(e);typeTotals[t]=(typeTotals[t]||0)+1;
+    (e.media.tagNames||[]).forEach(g=>{const r=by[g] ||= {total:0};r.total++;r[t]=(r[t]||0)+1});
+  });
+  const rows=Object.entries(by).sort((a,b)=>b[1].total-a[1].total||a[0].localeCompare(b[0])).slice(0,20);
+  const types=[...TYPES,'Other'].filter(t=>rows.some(r=>r[1][t]));
+  const bars=$('tbars');
+  if(!rows.length){$('tlegend').innerHTML='';bars.innerHTML='<p class="shint">No tags on your list yet.</p>';return}
+  $('tlegend').innerHTML=types.map(t=>`<span><i style="background:${TYPE_COLOR[t]}"></i>${esc(t)} <small>${typeTotals[t]}</small></span>`).join('');
+  const max=rows[0][1].total;
+  bars.innerHTML=rows.map(([g,r])=>{
+    const segs=types.filter(t=>r[t]).map(t=>`<a class="seg-b" href="${esc(libLink({tag:g,type:t}))}" data-g="${esc(g)}" data-t="${esc(t)}" data-n="${r[t]}" data-total="${r.total}" style="flex:${r[t]} 1 0;background:${TYPE_COLOR[t]};color:${inkOn(TYPE_COLOR[t])}" aria-label="${esc(g)}, ${esc(t)}: ${plural(r[t],'title')}"></a>`).join('');
+    return `<div class="brow" role="listitem"><a href="${esc(libLink({tag:g}))}" title="Open ${esc(g)} titles">${esc(shortTag(g))}</a><div class="bcell"><div class="btrack" style="width:calc((100% - 44px) * ${Math.max(r.total/max,.03).toFixed(4)})">${segs}</div><span class="btotal">${r.total}</span></div></div>`;
+  }).join('');
+  fitLabels();
+}
+function fitLabels(){document.querySelectorAll('.seg-b').forEach(s=>{s.textContent=s.offsetWidth>=28?s.dataset.n:''})}
+addEventListener('resize',fitLabels);
+wireTip($('tbars'),'.seg-b',t=>[`${t.dataset.g}: ${t.dataset.t}`,`${plural(+t.dataset.n,'title')}, ${Math.round(t.dataset.n/t.dataset.total*100)}% of ${t.dataset.g}`]);
+
+/* ---------- boot ---------- */
+let started=false;
+function onData(d){
+  name=d.u.name;entries=d.entries;
+  if(!started){
+    started=true;
+    const c=loadCache();
+    if(c){items=c.items;render()}
+  }
+  sync();
+}
+Site.boot('stats',onData);
+</script>
+</body>
+</html>

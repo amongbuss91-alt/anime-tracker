@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Universe | StoryShelf Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Karla:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site.css?v=20261004o">
+<style>
+.ucard{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin-bottom:22px}
+.uhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.uhead h2{margin:0;font:700 1.15rem Cinzel,serif}
+.uhead small{color:var(--mute)}
+.uscroll{overflow-x:auto;padding-bottom:6px}
+.uscroll svg{display:block}
+.ulab{font:600 10px Karla,sans-serif;fill:#c9c3ee;paint-order:stroke;stroke:#14122c;stroke-width:3px}
+.utitle{font:600 11px Karla,sans-serif;fill:#e8e4f8}
+.usub{font:10px Karla,sans-serif;fill:#9a94c8}
+.unode:hover rect.frame{stroke-width:3}
+.uopts{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-bottom:20px}
+.uopts label{display:inline-flex;gap:8px;align-items:center;cursor:pointer}
+.utiles{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+.utiles div{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 18px}
+.utiles b{display:block;font:700 1.6rem Cinzel,serif}
+.utiles span{color:var(--mute);font-size:.85rem}
+</style>
+</head>
+<body class="app">
+<div id="nav"></div>
+<main class="shell" id="main">
+  <div class="pagehead"><div><h1>Universe</h1><p class="lede" id="lede">Loading…</p></div><div class="livebox" id="livebox"></div></div>
+  <div id="content">
+    <div class="utiles" id="utiles"></div>
+    <div class="uopts">
+      <label><input type="checkbox" id="o-anime"> Only universes with an anime</label>
+      <label><input type="checkbox" id="o-loose"> Include loose links (shared characters, other)</label>
+    </div>
+    <div class="legend" id="legend"></div>
+    <p class="msg" id="status"></p>
+    <div id="out"></div>
+  </div>
+</main>
+<script src="site.js?v=20261004o"></script>
+<script>
+const {$,esc,STATUS,titleOf}=Site;
+const COLORS={Manhwa:'#3987e5',Manga:'#d95926',Manhua:'#199e70',Novel:'#c98500',Anime:'#c05cd6',Other:'#898781'};
+const STRONG=new Set(['ADAPTATION','SOURCE','PREQUEL','SEQUEL','PARENT','SIDE_STORY','SPIN_OFF','ALTERNATIVE','SUMMARY','COMPILATION','CONTAINS']);
+const REL_LABEL={ADAPTATION:'adapted as',SOURCE:'based on',PREQUEL:'prequel',SEQUEL:'sequel',PARENT:'parent story',SIDE_STORY:'side story',SPIN_OFF:'spin-off',ALTERNATIVE:'alternative',SUMMARY:'summary',COMPILATION:'compilation',CONTAINS:'contains',CHARACTER:'shared character',OTHER:'related'};
+const NODE_W=64,NODE_H=96,COL=170,ROW=150,PAD=24;
+
+let mine=null,relData=null,animeStatus=null,loading=false,seenSig='';
+
+function medium(m){
+  if(m.type==='ANIME')return 'Anime';
+  if(m.format==='NOVEL'||m.format==='LIGHT_NOVEL')return 'Novel';
+  const c=m.countryOfOrigin;
+  if(c==='KR')return 'Manhwa';
+  if(c==='CN'||c==='TW'||c==='HK')return 'Manhua';
+  if(c==='JP'||!c)return 'Manga';
+  return 'Other';
+}
+const nameOf=t=>(t&&(t.english||t.romaji||t.native))||'Untitled';
+
+async function gql(query,variables){
+  const r=await fetch('https://graphql.anilist.co',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({query,variables})});
+  if(r.status===429)throw new Error('AniList is rate limiting this page. Wait a minute and reload.');
+  const j=await r.json();if(j.errors)throw new Error('AniList returned an error.');return j.data;
+}
+const REL_Q=`query($ids:[Int]){Page(page:1,perPage:50){media(id_in:$ids){id relations{edges{relationType(version:2) node{id type format countryOfOrigin siteUrl isAdult title{romaji english native} coverImage{medium}}}}}}}`;
+async function loadRelations(ids){
+  const key='universe.rel.v1',cache=(()=>{try{return JSON.parse(sessionStorage.getItem(key)||'{}')}catch(e){return {}}})();
+  const need=ids.filter(i=>!cache[i]);
+  for(let i=0;i<need.length;i+=50){
+    $('status').textContent=`Loading connections… ${Math.min(i+50,need.length)} of ${need.length}`;
+    const d=await gql(REL_Q,{ids:need.slice(i,i+50)});
+    d.Page.media.forEach(m=>{cache[m.id]=m.relations.edges.map(e=>({t:e.relationType,n:e.node}))});
+    need.slice(i,i+50).forEach(id=>{if(!cache[id])cache[id]=[]});
+  }
+  try{sessionStorage.setItem(key,JSON.stringify(cache))}catch(e){}
+  return cache;
+}
+async function loadAnimeList(name){
+  const key='universe.anime.v1:'+name.toLowerCase();
+  try{const c=sessionStorage.getItem(key);if(c)return JSON.parse(c)}catch(e){}
+  const out={};let chunk=1,more=true;
+  while(more&&chunk<=20){
+    const d=await gql(`query($n:String,$c:Int){MediaListCollection(userName:$n,type:ANIME,chunk:$c){hasNextChunk lists{entries{status media{id}}}}}`,{n:name,c:chunk});
+    d.MediaListCollection.lists.forEach(l=>l.entries.forEach(e=>{out[e.media.id]=e.status}));
+    more=!!d.MediaListCollection.hasNextChunk;chunk++;
+  }
+  try{sessionStorage.setItem(key,JSON.stringify(out))}catch(e){}
+  return out;
+}
+
+function build(entries,rel,anime,loose){
+  const nodes=new Map(),edges=new Map();
+  const listIds=new Set(entries.map(e=>e.media.id));
+  entries.forEach(e=>{const m=e.media;nodes.set(m.id,{id:m.id,title:titleOf(e),url:m.siteUrl,cover:m.coverImage.large,medium:medium({type:'MANGA',format:m.format,countryOfOrigin:m.countryOfOrigin}),mine:STATUS[e.status],anime:null})});
+  entries.forEach(e=>{
+    (rel[e.media.id]||[]).forEach(({t,n})=>{
+      if(!loose&&!STRONG.has(t))return;
+      if(n.isAdult&&false)return;
+      if(!nodes.has(n.id))nodes.set(n.id,{id:n.id,title:nameOf(n.title),url:n.siteUrl,cover:n.coverImage&&n.coverImage.medium,medium:medium(n),mine:null,anime:n.type==='ANIME'?(anime[n.id]?anime[n.id]:null):null});
+      const a=Math.min(e.media.id,n.id),b=Math.max(e.media.id,n.id),k=a+'-'+b;
+      if(!edges.has(k))edges.set(k,{a:e.media.id,b:n.id,t});
+    });
+  });
+  // other list titles may appear as nodes in someone's relations: fill their list status
+  nodes.forEach(n=>{if(listIds.has(n.id))return});
+  // union-find
+  const parent=new Map();[...nodes.keys()].forEach(i=>parent.set(i,i));
+  const find=x=>{while(parent.get(x)!==x){parent.set(x,parent.get(parent.get(x)));x=parent.get(x)}return x};
+  edges.forEach(e=>{parent.set(find(e.a),find(e.b))});
+  const groups=new Map();
+  nodes.forEach((n,id)=>{const r=find(id);if(!groups.has(r))groups.set(r,[]);groups.get(r).push(n)});
+  const out=[];
+  groups.forEach(ns=>{
+    if(ns.length<2)return;
+    if(!ns.some(n=>listIds.has(n.id)))return;
+    const ids=new Set(ns.map(n=>n.id));
+    const es=[...edges.values()].filter(e=>ids.has(e.a)&&ids.has(e.b));
+    out.push({nodes:ns,edges:es,media:new Set(ns.map(n=>n.medium)),hasAnime:ns.some(n=>n.medium==='Anime'),mineCount:ns.filter(n=>n.mine).length});
+  });
+  out.sort((x,y)=>(y.media.size-x.media.size)||(y.nodes.length-x.nodes.length));
+  return out;
+}
+
+function layout(g){
+  const adj=new Map();g.nodes.forEach(n=>adj.set(n.id,[]));
+  g.edges.forEach(e=>{adj.get(e.a).push(e.b);adj.get(e.b).push(e.a)});
+  const root=[...g.nodes].sort((a,b)=>adj.get(b.id).length-adj.get(a.id).length)[0].id;
+  const depth=new Map([[root,0]]),q=[root];
+  while(q.length){const x=q.shift();adj.get(x).forEach(y=>{if(!depth.has(y)){depth.set(y,depth.get(x)+1);q.push(y)}})}
+  const cols=[];g.nodes.forEach(n=>{const d=depth.get(n.id)||0;(cols[d]||(cols[d]=[])).push(n)});
+  const pos=new Map();let maxRows=0;
+  cols.forEach((c,ci)=>{c.sort((a,b)=>a.medium.localeCompare(b.medium)||a.title.localeCompare(b.title));maxRows=Math.max(maxRows,c.length)});
+  cols.forEach((c,ci)=>{
+    const off=(maxRows-c.length)*ROW/2;
+    c.forEach((n,ri)=>pos.set(n.id,{x:PAD+ci*COL,y:PAD+off+ri*ROW}));
+  });
+  return {pos,w:PAD*2+(cols.length-1)*COL+NODE_W+20,h:PAD*2+(maxRows-1)*ROW+NODE_H+34};
+}
+
+const short=(s,n)=>s.length>n?s.slice(0,n-1)+'…':s;
+function drawGroup(g,i){
+  const {pos,w,h}=layout(g);
+  const showLabels=g.nodes.length<=10;
+  let svg=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Connected titles">`;
+  g.edges.forEach(e=>{
+    const p=pos.get(e.a),q=pos.get(e.b);if(!p||!q)return;
+    const x1=p.x+NODE_W/2,y1=p.y+NODE_H/2,x2=q.x+NODE_W/2,y2=q.y+NODE_H/2;
+    const mx=(x1+x2)/2,my=(y1+y2)/2;
+    const loose=!STRONG.has(e.t);
+    svg+=`<path d="M${x1},${y1} Q${mx},${my-(x1===x2?0:0)} ${x2},${y2}" fill="none" stroke="${loose?'#5d5790':'#7c6cf0'}" stroke-width="${loose?1.2:2}" ${loose?'stroke-dasharray="4 4"':''} opacity=".8"><title>${esc(REL_LABEL[e.t]||e.t)}</title></path>`;
+    if(showLabels)svg+=`<text class="ulab" x="${mx}" y="${my}" text-anchor="middle">${esc(REL_LABEL[e.t]||e.t)}</text>`;
+  });
+  g.nodes.forEach(n=>{
+    const p=pos.get(n.id),c=COLORS[n.medium]||COLORS.Other;
+    const tag=n.mine?n.mine:(n.anime?'Anime list: '+n.anime.toLowerCase().replace('_',' '):'');
+    svg+=`<a class="unode" href="${esc(n.url||'#')}" target="_blank" rel="noopener"><title>${esc(n.title)} · ${n.medium}${tag?' · '+esc(tag):''}</title>
+      <rect x="${p.x-3}" y="${p.y-3}" width="${NODE_W+6}" height="${NODE_H+6}" rx="8" fill="#14122c"/>
+      ${n.cover?`<image href="${esc(n.cover)}" x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" preserveAspectRatio="xMidYMid slice" clip-path="inset(0 round 6px)"/>`:''}
+      <rect class="frame" x="${p.x-1}" y="${p.y-1}" width="${NODE_W+2}" height="${NODE_H+2}" rx="7" fill="none" stroke="${c}" stroke-width="2"/>
+      ${n.mine||n.anime?`<circle cx="${p.x+NODE_W-4}" cy="${p.y+6}" r="7" fill="#7c6cf0" stroke="#fff" stroke-width="1.5"/>`:''}
+      <text class="utitle" x="${p.x+NODE_W/2}" y="${p.y+NODE_H+16}" text-anchor="middle">${esc(short(n.title,20))}</text>
+      <text class="usub" x="${p.x+NODE_W/2}" y="${p.y+NODE_H+29}" text-anchor="middle">${esc(n.medium)}</text></a>`;
+  });
+  svg+='</svg>';
+  const root=[...g.nodes].sort((a,b)=>(b.mine?1:0)-(a.mine?1:0)||a.title.localeCompare(b.title))[0];
+  return `<section class="ucard"><div class="uhead"><h2>${esc(root.title)}</h2><small>${g.nodes.length} titles · ${[...g.media].join(', ')} · ${g.mineCount} on your manga list</small></div><div class="uscroll">${svg}</div></section>`;
+}
+
+function paint(){
+  if(!mine||!relData)return;
+  const loose=$('o-loose').checked,onlyAnime=$('o-anime').checked;
+  let groups=build(mine.entries,relData,animeStatus||{},loose);
+  const total=groups.length;
+  if(onlyAnime)groups=groups.filter(g=>g.hasAnime);
+  const withAnime=groups.filter(g=>g.hasAnime).length,cross=groups.filter(g=>g.media.size>1).length;
+  const linked=new Set();groups.forEach(g=>g.nodes.forEach(n=>{if(n.mine)linked.add(n.id)}));
+  $('utiles').innerHTML=`<div><b>${groups.length}</b><span>connected universes</span></div><div><b>${linked.size}</b><span>of your titles are connected</span></div><div><b>${withAnime}</b><span>include an anime</span></div><div><b>${cross}</b><span>cross more than one medium</span></div>`;
+  $('legend').innerHTML=Object.entries(COLORS).map(([k,c])=>`<span><i style="background:${c}"></i>${k}</span>`).join('')+'<span><i style="background:#7c6cf0;border-radius:50%"></i>On your list</span><span><small>Solid line = story link, dashed = loose link</small></span>';
+  $('out').innerHTML=groups.length?groups.map(drawGroup).join(''):'<p class="msg">No connected titles found with these settings.</p>';
+  $('status').textContent='';
+  $('lede').textContent='Titles on your list that connect to each other or to an anime, based on the relations AniList lists for each one.';
+}
+
+async function onData(d){
+  mine=d;
+  const sig=d.entries.map(e=>e.media.id).sort().join(',');
+  if(sig===seenSig&&relData){paint();return}
+  if(loading)return;
+  loading=true;seenSig=sig;
+  try{
+    $('status').textContent='Loading connections…';
+    relData=await loadRelations(d.entries.map(e=>e.media.id));
+    paint();
+    animeStatus=await loadAnimeList(d.u.name).catch(()=>({}));
+    paint();
+  }catch(e){$('status').textContent=e.message||'Could not load connections.';$('status').className='msg err'}
+  loading=false;
+}
+$('o-anime').addEventListener('change',paint);$('o-loose').addEventListener('change',paint);
+Site.boot('universe',onData);
+</script>
+</body>
+</html>

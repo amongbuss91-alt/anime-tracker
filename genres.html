@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Genres | StoryShelf Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Karla:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site.css?v=20261004o">
+</head>
+<body class="app">
+<div id="nav"></div>
+<main class="shell" id="main">
+  <div class="pagehead">
+    <div><h1>Genres</h1><p class="lede" id="lede">Loading your list…</p></div>
+    <div class="livebox" id="livebox"></div>
+  </div>
+
+  <div id="content" class="hidden">
+    <div class="scope" id="scope" role="group" aria-label="Show titles with status"></div>
+
+    <section class="block" aria-labelledby="h-bars">
+      <h2 id="h-bars">Genres by type</h2>
+      <p class="desc">How many titles carry each genre, split into manhwa, manga and manhua. A title with three genres counts once in each of those rows. Select a bar to open those titles in your library.</p>
+      <div class="legend" id="legend"></div>
+      <div class="bars" id="bars" role="list"></div>
+    </section>
+
+    <section class="block" aria-labelledby="h-pairs">
+      <h2 id="h-pairs">Genres that go together</h2>
+      <p class="desc">Each block counts the titles that carry both genres. Brighter blocks are more common pairings. Select a block to open those titles.</p>
+      <div class="pairs-layout" id="pairs-layout">
+        <div>
+          <div class="mscroll"><div class="matrix" id="matrix"></div></div>
+          <div class="scale"><span>Fewer titles</span><i></i><span>More titles</span></div>
+        </div>
+        <div class="toplist"><h3>Most common pairings</h3><ol id="toplist"></ol></div>
+      </div>
+      <p class="shint hidden" id="pairs-empty">Not enough genres in this view to compare.</p>
+    </section>
+  </div>
+</main>
+<div class="tip hidden" id="tip" role="tooltip"></div>
+
+<script src="site.js?v=20261004o"></script>
+<script>
+const {$,esc,STATUS,STATUS_ORDER,TYPES,originOf}=Site;
+const TYPE_COLOR={Manhwa:'#3987e5',Manga:'#d95926',Manhua:'#199e70',Novel:'#c98500',Other:'#898781'};
+const RAMP=['#184f95','#256abf','#3987e5','#6da7ec','#9ec5f4'];
+let all=[],user='',scope='All';
+
+const lum=h=>{const c=[1,3,5].map(i=>{const v=parseInt(h.substr(i,2),16)/255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*c[0]+.7152*c[1]+.0722*c[2]};
+const inkOn=h=>lum(h)>.18?'#0a091c':'#ffffff';
+const plural=(n,w)=>`${n} ${w}${n===1?'':'s'}`;
+const libLink=(p)=>{
+  const q=new URLSearchParams({user});
+  if(p.genre)q.set('genre',[].concat(p.genre).join(','));
+  if(p.type)q.set('type',p.type);
+  if(scope!=='All')q.set('status',scope);
+  return 'library.html?'+q.toString();
+};
+
+/* ---------- tooltip (text only, never HTML) ---------- */
+const tip=$('tip');
+function showTip(title,sub,x,y){
+  tip.textContent='';
+  const s=document.createElement('strong');s.textContent=title;
+  const p=document.createElement('span');p.textContent=sub;
+  tip.append(s,p);tip.classList.remove('hidden');
+  const w=tip.offsetWidth,h=tip.offsetHeight;
+  tip.style.left=Math.max(8,Math.min(x+14,innerWidth-w-8))+'px';
+  tip.style.top=Math.max(8,Math.min(y+16,innerHeight-h-8))+'px';
+}
+const hideTip=()=>tip.classList.add('hidden');
+function wireTip(root,sel,textFn){
+  root.addEventListener('pointermove',e=>{const t=e.target.closest(sel);if(!t){hideTip();return}const [a,b]=textFn(t);showTip(a,b,e.clientX,e.clientY)});
+  root.addEventListener('pointerleave',hideTip);
+  root.addEventListener('focusin',e=>{const t=e.target.closest(sel);if(!t)return;const [a,b]=textFn(t),r=t.getBoundingClientRect();showTip(a,b,r.left+r.width/2,r.bottom-8)});
+  root.addEventListener('focusout',hideTip);
+}
+
+/* ---------- data in ---------- */
+function onData(d){
+  all=d.entries;user=d.u.name;
+  if(!all.length){
+    $('lede').textContent='This list is empty, or it is set to private on AniList.';
+    $('content').classList.add('hidden');return;
+  }
+  $('content').classList.remove('hidden');
+  render();
+}
+function scoped(){return scope==='All'?all:all.filter(e=>STATUS[e.status]===scope)}
+
+function render(){
+  hideTip();
+  paintScope();
+  const list=scoped();
+  const by={};      /* genre -> {total, Manhwa:n, Manga:n, ...} */
+  const typeTotals={};
+  list.forEach(e=>{
+    const t=originOf(e);typeTotals[t]=(typeTotals[t]||0)+1;
+    (e.media.genres||[]).forEach(g=>{const r=by[g] ||= {total:0};r.total++;r[t]=(r[t]||0)+1});
+  });
+  const rows=Object.entries(by).sort((a,b)=>b[1].total-a[1].total||a[0].localeCompare(b[0]));
+  const types=[...TYPES,'Other'].filter(t=>typeTotals[t]);
+  const top=rows[0];
+  $('lede').textContent=rows.length
+    ?`${plural(list.length,'title')} across ${plural(rows.length,'genre')}. The most common genre is ${top[0]}, on ${top[1].total}.`
+    :`${plural(list.length,'title')} in this view, none with genres.`;
+  drawBars(rows,types,typeTotals);
+  drawMatrix(list,rows);
+}
+
+function paintScope(){
+  const counts=s=>s==='All'?all.length:all.filter(e=>STATUS[e.status]===s).length;
+  $('scope').innerHTML='<span>Show</span>'+['All',...STATUS_ORDER].map(s=>`<button type="button" class="seg${scope===s?' on':''}" data-s="${esc(s)}" aria-pressed="${scope===s}">${esc(s)}<small>${counts(s)}</small></button>`).join('');
+}
+$('scope').addEventListener('click',e=>{const b=e.target.closest('.seg');if(b){scope=b.dataset.s;render()}});
+
+/* ---------- chart 1: genres by type (stacked bars) ---------- */
+function drawBars(rows,types,typeTotals){
+  const bars=$('bars');
+  if(!rows.length){$('legend').innerHTML='';bars.innerHTML='<p class="shint">No titles with genres in this view.</p>';return}
+  $('legend').innerHTML=types.map(t=>`<span><i style="background:${TYPE_COLOR[t]}"></i>${esc(t)} <small>${typeTotals[t]}</small></span>`).join('');
+  const max=rows[0][1].total;
+  bars.innerHTML=rows.map(([g,r])=>{
+    const segs=types.filter(t=>r[t]).map(t=>`<a class="seg-b" href="${esc(libLink({genre:g,type:t}))}" data-g="${esc(g)}" data-t="${esc(t)}" data-n="${r[t]}" data-total="${r.total}" style="flex:${r[t]} 1 0;background:${TYPE_COLOR[t]};color:${inkOn(TYPE_COLOR[t])}" aria-label="${esc(g)}, ${esc(t)}: ${plural(r[t],'title')}"></a>`).join('');
+    return `<div class="brow" role="listitem"><a href="${esc(libLink({genre:g}))}" title="Open ${esc(g)} titles">${esc(g)}</a><div class="bcell"><div class="btrack" style="width:calc((100% - 44px) * ${Math.max(r.total/max,.03).toFixed(4)})">${segs}</div><span class="btotal">${r.total}</span></div></div>`;
+  }).join('');
+  fitLabels();
+}
+/* put the count inside a segment only when it fits with room to spare */
+function fitLabels(){
+  document.querySelectorAll('.seg-b').forEach(s=>{s.textContent=s.offsetWidth>=28?s.dataset.n:''});
+}
+let rz;window.addEventListener('resize',()=>{cancelAnimationFrame(rz);rz=requestAnimationFrame(fitLabels)});
+wireTip($('bars'),'.seg-b',t=>[`${t.dataset.g}: ${t.dataset.t}`,`${plural(+t.dataset.n,'title')}, ${Math.round(t.dataset.n/t.dataset.total*100)}% of ${t.dataset.g}`]);
+
+/* ---------- chart 2: genre pairings (lower-triangle heatmap + ranked list) ---------- */
+function drawMatrix(list,rows){
+  const names=rows.map(r=>r[0]),topN=names.slice(0,Math.min(12,names.length));
+  const idx={};topN.forEach((g,i)=>idx[g]=i);
+  const pair={};      /* "a|b" (alphabetical) -> count, across every genre */
+  list.forEach(e=>{
+    const gs=[...new Set(e.media.genres||[])].sort();
+    for(let i=0;i<gs.length;i++)for(let j=i+1;j<gs.length;j++){const k=gs[i]+'|'+gs[j];pair[k]=(pair[k]||0)+1}
+  });
+  const get=(a,b)=>pair[a<b?a+'|'+b:b+'|'+a]||0;
+  const ranked=Object.entries(pair).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,8);
+  const empty=topN.length<2||!ranked.length;
+  $('pairs-layout').classList.toggle('hidden',empty);
+  $('pairs-empty').classList.toggle('hidden',!empty);
+  if(empty)return;
+
+  const n=topN.length;
+  let max=0;for(let r=1;r<n;r++)for(let c=0;c<r;c++)max=Math.max(max,get(topN[r],topN[c]));
+  const m=$('matrix');
+  m.style.gridTemplateColumns=`auto repeat(${n-1},var(--cell))`;
+  let h='';
+  for(let r=1;r<n;r++){
+    h+=`<div class="mlabel" id="rl-${r}">${esc(topN[r])}</div>`;
+    for(let c=0;c<n-1;c++){
+      if(c>=r){h+='<div></div>';continue}
+      const v=get(topN[r],topN[c]);
+      if(!v){h+=`<span class="mcell empty" data-r="${r}" data-c="${c}"></span>`;continue}
+      const col=RAMP[Math.min(4,Math.floor(v/max*5))];
+      h+=`<a class="mcell" href="${esc(libLink({genre:[topN[c],topN[r]]}))}" data-r="${r}" data-c="${c}" data-a="${esc(topN[c])}" data-b="${esc(topN[r])}" data-n="${v}" style="background:${col}" aria-label="${esc(topN[c])} and ${esc(topN[r])}: ${plural(v,'title')}"></a>`;
+    }
+  }
+  h+='<div></div>';
+  for(let c=0;c<n-1;c++)h+=`<div class="mlabel col" id="cl-${c}">${esc(topN[c])}</div>`;
+  m.innerHTML=h;
+
+  const pmax=ranked[0][1];
+  $('toplist').innerHTML=ranked.map(([k,v])=>{
+    const [a,b]=k.split('|');
+    return `<li><a href="${esc(libLink({genre:[a,b]}))}"><span class="n">${esc(a)} + ${esc(b)}</span><div class="meter"><i style="width:${v/pmax*100}%"></i></div></a><span class="v">${v}</span></li>`;
+  }).join('');
+}
+wireTip($('matrix'),'a.mcell',t=>[`${t.dataset.a} + ${t.dataset.b}`,plural(+t.dataset.n,'title')+' carry both']);
+$('matrix').addEventListener('pointerover',e=>{
+  const c=e.target.closest('.mcell');
+  document.querySelectorAll('.mlabel.hl').forEach(x=>x.classList.remove('hl'));
+  if(!c)return;
+  const r=$('rl-'+c.dataset.r),k=$('cl-'+c.dataset.c);
+  if(r)r.classList.add('hl');if(k)k.classList.add('hl');
+});
+$('matrix').addEventListener('pointerleave',()=>document.querySelectorAll('.mlabel.hl').forEach(x=>x.classList.remove('hl')));
+
+Site.boot('genres',onData);
+</script>
+</body>
+</html>

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library | AnimeShelf Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=M+PLUS+Rounded+1c:wght@400;500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site.css?v=20261005d">
+</head>
+<body class="app">
+<div id="nav"></div>
+<main class="shell" id="main">
+  <div class="pagehead">
+    <div><h1>Library</h1><p class="lede" id="lede"></p></div>
+    <div class="livebox" id="livebox"></div>
+  </div>
+
+  <div class="layout" id="layout">
+    <details class="side" id="side" open>
+      <summary><span>Filters</span><span id="fcount"></span></summary>
+      <div class="fgroup"><h2>Type</h2><div id="f-type"></div></div>
+      <div class="fgroup"><h2>Status</h2><div id="f-status"></div></div>
+      <div class="fgroup"><h2>Genres</h2><div class="genrelist" id="f-genre"></div></div>
+      <button class="btn" id="fclear" type="button">Clear all filters</button>
+    </details>
+
+    <section aria-label="Results">
+      <div class="toolbar">
+        <div class="field searchbox-wrap">
+          <label for="filter">Search your list</label>
+          <div class="searchbox">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input id="filter" type="search" placeholder="Search by title" autocomplete="off">
+            <button class="btn quiet" id="sclear" type="button" aria-label="Clear search">Clear</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="group">Organize by</label>
+          <select id="group">
+            <option value="az">Title (A–Z)</option>
+            <option value="recent">Recently watched</option>
+            <option value="added">Recently added</option>
+            <option value="pub">Release year</option>
+            <option value="rating">Rating</option>
+            <option value="origin">Type</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="per">Per page</label>
+          <select id="per"><option selected>24</option><option>48</option><option>96</option></select>
+        </div>
+      </div>
+      <p class="shint" id="shint"></p>
+            <div class="resultbar" id="rbar"></div>
+      <div id="out"><p class="msg">Loading your anime…</p></div>
+      <nav class="pager" id="pager" aria-label="Pagination"></nav>
+    </section>
+  </div>
+</main>
+
+<script src="site.js?v=20261005d"></script>
+<script>
+const {contentLabel,$,esc,STATUS,STATUS_ORDER,TYPES,originOf,titleOf,avg,norm,matches,agoText}=Site;
+let all=[],state={type:'All',status:'All',genres:[],tags:[],page:1};
+
+/* start from the link (the Genres page sends people here with a genre or type already picked) */
+(function(){
+  const p=new URLSearchParams(location.search);
+  const t=p.get('type'),s=p.get('status'),g=p.get('genre');
+  if(t)state.type=t;
+  if(s)state.status=s;
+  if(g)state.genres=g.split(',').filter(Boolean);
+  if(p.get('tag'))state.tags=p.get('tag').split(',').filter(Boolean);
+  if(p.get('q'))$('filter').value=p.get('q');
+})();
+
+const alpha=(a,b)=>a.localeCompare(b);
+const desc=(a,b)=>String(b).localeCompare(String(a),undefined,{numeric:true});
+const numFirst=cmp=>(a,b)=>{const A=/^\d/.test(a),B=/^\d/.test(b);return A&&B?cmp(a,b):A?-1:B?1:alpha(a,b)};
+const byTitle=(a,b)=>titleOf(a).localeCompare(titleOf(b));
+const notStarted=e=>!e.progress&&STATUS[e.status]!=='Completed';
+const RECENT=['Last 24 hours','Past 7 days','Past 30 days','Past 3 months','Older','Not started yet'];
+function recentBucket(e){
+  if(notStarted(e)||!e.updatedAt)return 'Not started yet';
+  const h=(Date.now()/1000-e.updatedAt)/3600;
+  return h<24?'Last 24 hours':h<168?'Past 7 days':h<720?'Past 30 days':h<2160?'Past 3 months':'Older';
+}
+const ADDED=['Last 24 hours','Past 7 days','Past 30 days','Past 3 months','Older','Date not available'];
+function addedBucket(e){
+  if(!e.createdAt)return 'Date not available';
+  const h=(Date.now()/1000-e.createdAt)/3600;
+  return h<24?'Last 24 hours':h<168?'Past 7 days':h<720?'Past 30 days':h<2160?'Past 3 months':'Older';
+}
+const modes={
+ az:{key:e=>{const c=titleOf(e)[0].toUpperCase();return /[A-Z]/.test(c)?c:'#'},keys:(a,b)=>a==='#'?1:b==='#'?-1:alpha(a,b),inner:byTitle},
+ recent:{key:recentBucket,keys:(a,b)=>RECENT.indexOf(a)-RECENT.indexOf(b),inner:(a,b)=>(b.updatedAt-a.updatedAt)||byTitle(a,b)},
+ added:{key:addedBucket,keys:(a,b)=>ADDED.indexOf(a)-ADDED.indexOf(b),inner:(a,b)=>((b.createdAt||0)-(a.createdAt||0))||byTitle(a,b)},
+ pub:{key:e=>(e.media.startDate||{}).year||'Year unknown',keys:numFirst(desc),inner:byTitle},
+ rating:{key:e=>avg(e)?String(Math.floor(avg(e))):'No rating yet',label:k=>/^\d/.test(k)?`${k}.0 to ${k}.9`:k,keys:numFirst(desc),inner:(a,b)=>avg(b)-avg(a)||byTitle(a,b)},
+ origin:{key:originOf,keys:alpha,inner:byTitle}
+};
+
+/* ---------- sidebar ---------- */
+function opt(kind,name,value,label,count,checked){
+  const zero=count===0&&value!=='All'?' zero':'';
+  return `<label class="opt${kind==='checkbox'?' check':''}${zero}"><input type="${kind}" name="${name}" value="${esc(value)}"${checked?' checked':''}><span class="box"></span><span class="t">${esc(label)}</span><small>${count}</small></label>`;
+}
+function buildSide(){
+  const types=[...TYPES.filter(t=>all.some(e=>originOf(e)===t)),...(all.some(e=>originOf(e)==='Other')?['Other']:[])];
+  $('f-type').innerHTML=['All',...types].map(t=>opt('radio','type',t,t,t==='All'?all.length:all.filter(e=>originOf(e)===t).length,state.type===t)).join('');
+  $('f-status').innerHTML=['All',...STATUS_ORDER].map(s=>opt('radio','status',s,s,s==='All'?all.length:all.filter(e=>STATUS[e.status]===s).length,state.status===s)).join('');
+  const gc={};all.forEach(e=>(e.media.genres||[]).forEach(g=>gc[g]=(gc[g]||0)+1));
+  const gs=Object.keys(gc).sort(alpha);
+  $('f-genre').innerHTML=gs.length?gs.map(g=>opt('checkbox','genre',g,g,gc[g],state.genres.includes(g))).join(''):'<p class="shint">No genres on this list.</p>';
+  return {types,gc};
+}
+function syncSide(){
+  document.querySelectorAll('#f-type input').forEach(i=>i.checked=i.value===state.type);
+  document.querySelectorAll('#f-status input').forEach(i=>i.checked=i.value===state.status);
+  document.querySelectorAll('#f-genre input').forEach(i=>i.checked=state.genres.includes(i.value));
+}
+
+/* ---------- data in ---------- */
+function onData(d){
+  all=d.entries;
+  $('lede').textContent='';
+  if(!all.length){
+    $('layout').classList.add('hidden');
+    $('main').insertAdjacentHTML('beforeend','<p class="msg" id="emptymsg">This list is empty, or it is set to private on AniList.</p>');
+    return;
+  }
+  const em=$('emptymsg');if(em)em.remove();
+  $('layout').classList.remove('hidden');
+  const {types,gc}=buildSide();
+  if(state.type!=='All'&&!types.includes(state.type))state.type='All';
+  if(state.status!=='All'&&!STATUS_ORDER.includes(state.status))state.status='All';
+  state.genres=state.genres.filter(g=>gc[g]);
+  syncSide();render();
+}
+
+/* ---------- render ---------- */
+function filtered(){
+  const q=norm($('filter').value);
+  return all.filter(e=>(state.type==='All'||originOf(e)===state.type)&&(state.status==='All'||STATUS[e.status]===state.status)&&state.genres.every(g=>(e.media.genres||[]).includes(g))&&state.tags.every(t=>(e.media.tagNames||[]).includes(t))&&(!q||matches(e,q)));
+}
+function paintBar(n){
+  const q=$('filter').value.trim();
+  const pills=[];
+  if(state.type!=='All')pills.push(['type',state.type]);
+  if(state.status!=='All')pills.push(['status',state.status]);
+  state.genres.forEach(g=>pills.push(['genre',g]));
+  state.tags.forEach(t=>pills.push(['tag',t]));
+  if(q)pills.push(['q','Search: '+q]);
+  $('rbar').innerHTML=`<span>${n===all.length?`<b>${n}</b> titles`:`<b>${n}</b> of ${all.length} titles`}</span>`+pills.map(([k,v])=>`<span class="pill">${esc(v)}<button type="button" data-k="${k}" data-v="${esc(v)}" aria-label="Remove ${esc(v)}">×</button></span>`).join('');
+  const active=pills.length;
+  $('fcount').textContent=active?active+' active':'';
+  $('sclear').style.visibility=q?'visible':'hidden';
+  $('shint').textContent=q?(n?'Searches English, romaji, native and alternate names.':`No title in this list matches "${q}". It may be listed under its romaji or Japanese name, so try that spelling.`):'';
+}
+function render(){
+  const M=modes[$('group').value],list=filtered();
+  paintBar(list.length);
+  if(!list.length){$('out').innerHTML='<p class="msg">Nothing matches these filters.</p>';$('pager').innerHTML='';return}
+  const groups={};
+  list.forEach(e=>{(groups[M.key(e)] ||= []).push(e)});
+  const keys=Object.keys(groups).sort(M.keys),flat=[];
+  keys.forEach(k=>groups[k].sort(M.inner).forEach(e=>flat.push([k,e])));
+  const size=+$('per').value,pages=Math.max(1,Math.ceil(flat.length/size));
+  state.page=Math.min(state.page,pages);
+  let html='',cur=null;
+  flat.slice((state.page-1)*size,state.page*size).forEach(([k,e])=>{
+    if(k!==cur){if(cur!==null)html+='</div></section>';cur=k;html+=`<section class="group"><h3>${esc(M.label?M.label(k):k)}<span>${groups[k].length}</span></h3><div class="grid">`}
+    html+=card(e);
+  });
+  $('out').innerHTML=html+'</div></section>';
+  pager(pages,flat.length);
+}
+function card(e){
+  const m=e.media,t=titleOf(e),a=avg(e);
+  const pct=m.episodes?Math.min(100,e.progress/m.episodes*100):(STATUS[e.status]==='Completed'?100:0);
+  const prog=e.progress?`, Ep. ${e.progress}${m.episodes?'/'+m.episodes:''}`:'';
+  const seen=$('group').value==='recent'&&!notStarted(e)&&e.updatedAt?`<div class="rel">Updated ${agoText(e.updatedAt)}</div>`:'';
+  const addedLine=$('group').value==='added'&&e.createdAt?`<div class="rel">Added ${agoText(e.createdAt)}</div>`:'';
+  const lab=contentLabel(e);
+  const PUB={RELEASING:'Airing',HIATUS:'On hiatus',CANCELLED:'Cancelled',NOT_YET_RELEASED:'Not yet aired'};
+  return `<div class="cardwrap"><a class="card${lab==='Adult'?' lab-adult':lab?' lab-sug':''}" href="${esc(m.siteUrl)}" target="_blank" rel="noopener" title="${esc(t)}">
+    <img class="cover" loading="lazy" src="${esc(m.coverImage.large)}" alt="">
+    <span class="tag">${esc(originOf(e))}</span>
+    ${a?`<span class="seal" title="AniList average score">${a.toFixed(1)}</span>`:''}
+    <div class="meta"><b>${esc(t)}</b><small>${esc(STATUS[e.status])}${prog}</small>${seen}${addedLine}${PUB[m.status]?`<div class="rel">${PUB[m.status]}</div>`:''}
+    <div class="bar"><i style="width:${pct}%"></i></div>${lab?`<div class="clabel" title="${lab==='Adult'?'Marked adult on AniList':'Suggestive tags on AniList (Ecchi, nudity, etc.)'}">${lab}</div>`:''}</div></a></div>`;
+}
+function pager(pages,total){
+  const el=$('pager'),p=state.page;
+  if(pages<=1){el.innerHTML='';return}
+  const nums=[...new Set([1,pages,p-1,p,p+1])].filter(n=>n>=1&&n<=pages).sort((a,b)=>a-b);
+  let h=`<button type="button" data-p="${p-1}"${p===1?' disabled':''}>Prev</button>`,last=0;
+  nums.forEach(n=>{if(n-last>1)h+='<span class="gap">…</span>';h+=`<button type="button" class="${n===p?'on':''}" data-p="${n}"${n===p?' aria-current="page"':''}>${n}</button>`;last=n});
+  el.innerHTML=h+`<button type="button" data-p="${p+1}"${p===pages?' disabled':''}>Next</button><span class="count">${total} titles</span>`;
+}
+
+/* ---------- events ---------- */
+const redraw=()=>{state.page=1;render()};
+$('filter').oninput=redraw;$('group').onchange=redraw;$('per').onchange=redraw;
+$('sclear').onclick=()=>{$('filter').value='';redraw();$('filter').focus()};
+$('f-type').addEventListener('change',e=>{state.type=e.target.value;redraw()});
+$('f-status').addEventListener('change',e=>{state.status=e.target.value;redraw()});
+$('f-genre').addEventListener('change',e=>{const v=e.target.value;state.genres=e.target.checked?[...state.genres,v]:state.genres.filter(x=>x!==v);redraw()});
+$('fclear').onclick=()=>{state.type='All';state.status='All';state.genres=[];state.tags=[];$('filter').value='';syncSide();redraw()};
+$('rbar').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  const k=b.dataset.k,v=b.dataset.v;
+  if(k==='type')state.type='All';
+  else if(k==='status')state.status='All';
+  else if(k==='genre')state.genres=state.genres.filter(g=>g!==v);
+  else if(k==='tag')state.tags=state.tags.filter(g=>g!==v);
+  else if(k==='q')$('filter').value='';
+  syncSide();redraw();
+});
+$('pager').addEventListener('click',e=>{
+  const b=e.target.closest('button');
+  if(b&&!b.disabled){state.page=+b.dataset.p;render();window.scrollTo({top:0})}
+});
+/* filters sit open beside the list on wide screens and fold into a drawer on narrow ones */
+const mq=window.matchMedia('(min-width:901px)');
+const syncDrawer=()=>{$('side').open=mq.matches};
+mq.addEventListener?mq.addEventListener('change',syncDrawer):mq.addListener(syncDrawer);
+syncDrawer();
+
+
+Site.boot('library',onData);
+</script>
+<script>
+/* keep the sidebar in view while the page scrolls; a sidebar taller than the window moves with the page until its bottom shows, then stays */
+(()=>{const side=document.querySelector('.side');if(!side)return;
+const fit=()=>{if(getComputedStyle(side).position!=='sticky')return;side.style.top=Math.min(76,innerHeight-side.offsetHeight-16)+'px'};
+addEventListener('resize',fit);if(window.ResizeObserver)new ResizeObserver(fit).observe(side);fit()})();
+</script>
+</body>
+</html>
